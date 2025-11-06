@@ -1,4 +1,4 @@
-// content.js (uses updated scraper/ui; persists mails; clicking opens new tab)
+// content.js (old working code + minimal safe periodic extend-clicker)
 (function(ETM){
   'use strict';
   try { if (!location.hostname.includes('etempmail.com')) return; } catch(e){ return; }
@@ -14,7 +14,7 @@
     } catch(e){}
   })();
 
-  function tryClickExtendButton(){
+  function tryClickExtendButtonFallback(){
     try {
       const cand = Array.from(document.querySelectorAll('button, a, input[type="button"]'));
       for (const el of cand){
@@ -32,11 +32,56 @@
     } catch(e){}
     return false;
   }
+
+  // === Minimal safe periodic clicker ===
+  // Interval in milliseconds (30s by default; change if you want faster)
   const EXTEND_INTERVAL_MS = 30 * 1000;
-  tryClickExtendButton();
-  const extendTimer = setInterval(()=> { tryClickExtendButton(); }, EXTEND_INTERVAL_MS);
+
+  function simpleExtendClick(){
+    try {
+      // prefer exact element if available
+      const btn = document.querySelector('#moreMinutes');
+      if (btn) {
+        try {
+          // scroll into view gently then click
+          try { btn.scrollIntoView({block: 'center', behavior: 'auto'}); } catch(e){}
+          btn.click();
+          return true;
+        } catch(e){
+          // fallback to dispatching events
+          try {
+            ['mouseover','mousedown','mouseup','click'].forEach(type=>{
+              btn.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+            });
+            return true;
+          } catch(evErr){
+            return false;
+          }
+        }
+      } else {
+        // fallback to older heuristic
+        return tryClickExtendButtonFallback();
+      }
+    } catch(e){ return false; }
+  }
+
+  // Start the minimal loop (one immediate click, then interval)
+  try {
+    simpleExtendClick();
+  } catch(e){}
+  const extendTimer = setInterval(() => { try { simpleExtendClick(); } catch(e){} }, EXTEND_INTERVAL_MS);
+
+  // Expose a small control for debugging in console:
+  // window.__ETM_extend_control.runOnce()   -> triggers one click
+  // window.__ETM_extend_control.stop()      -> stops the interval
+  window.__ETM_extend_control = {
+    runOnce: function(){ try { simpleExtendClick(); } catch(e){} },
+    stop: function(){ try { clearInterval(extendTimer); } catch(e){} }
+  };
+
   window.addEventListener('unload', ()=> { try{ clearInterval(extendTimer); }catch(e){} });
 
+  // === original scanning & UI update logic (unchanged) ===
   const doScanDebounced = ETM.debounce(function(){
     try {
       const e = ETM.scraper.getTempEmail();
