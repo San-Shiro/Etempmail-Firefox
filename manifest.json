@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "eTempMail Modular Scraper",
+  "version": "1.0",
+  "description": "Scrapes allotted temp-email and message body on etempmail.com and shows an overlay preview.",
+  "permissions": ["storage","tabs"],
+  "host_permissions": ["*://etempmail.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["*://etempmail.com/*"],
+      "js": ["utils.js", "scraper.js", "ui.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
