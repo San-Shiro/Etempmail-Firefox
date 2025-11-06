@@ -1,54 +1,68 @@
-// content.js
-// Orchestrator: initializes UI, periodically scans using scraper, observes mutations and updates UI.
-// Keeps everything defensive and debounced.
-
+// content.js (uses updated scraper/ui; persists mails; clicking opens new tab)
 (function(ETM){
   'use strict';
-  // quick guard — only run on target host
-  try {
-    if (!location.hostname.includes('etempmail.com')) return;
-  } catch(e) { return; }
+  try { if (!location.hostname.includes('etempmail.com')) return; } catch(e){ return; }
 
-  // init UI
   try { ETM.ui && ETM.ui.init(); } catch(e){}
 
-  // small debounced updater
-  const doUpdate = ETM.debounce(function(){
+  (async function initLoad(){
     try {
-      // update email
-      try {
-        const e = ETM.scraper.getTempEmail();
-        ETM.ui.setEmail(e || '');
-      } catch(e){}
-
-      // scan iframes for message body first
-      let found = null;
-      try { found = ETM.scraper.scanIframesForDataSrc(); } catch(e){}
-
-      if (found && (found.text || found.html)) {
-        // we have html/text — extract fields heuristically
-        const fields = ETM.scraper.extractFieldsFromHtml(found.html || found.text);
-        ETM.ui.setSubject(fields.subject || '');
-        // prefer extracted body, otherwise plain text
-        ETM.ui.setBody(fields.body || found.text || '');
-      } else {
-        // fallback: nothing found
-        ETM.ui.setSubject('(no subject found)');
-        ETM.ui.setBody('(message preview — not found yet)');
+      if (ETM.scraper && ETM.scraper.loadSavedMails) {
+        await ETM.scraper.loadSavedMails();
+        try { ETM.ui.renderMailList(ETM.scraper.getAllMails()); } catch(e){}
       }
-    } catch(err) {
-      // swallow
-      console.warn('content.doUpdate error', err && err.message);
-    }
-  }, 180); // 180ms debounce
+    } catch(e){}
+  })();
 
-  // initial update
-  try { doUpdate(); } catch(e){}
+  function tryClickExtendButton(){
+    try {
+      const cand = Array.from(document.querySelectorAll('button, a, input[type="button"]'));
+      for (const el of cand){
+        try {
+          const txt = (el.textContent || el.value || '').trim();
+          if (!txt) continue;
+          if (/extend\s*20/i.test(txt) || /extend\s*20\s*min/i.test(txt)) {
+            el.click();
+            return true;
+          }
+        } catch(e){}
+      }
+      const fallback = document.querySelector('[data-action="extend"]') || document.querySelector('.extend-20, .extend-button');
+      if (fallback) { try { fallback.click(); return true; } catch(e){} }
+    } catch(e){}
+    return false;
+  }
+  const EXTEND_INTERVAL_MS = 30 * 1000;
+  tryClickExtendButton();
+  const extendTimer = setInterval(()=> { tryClickExtendButton(); }, EXTEND_INTERVAL_MS);
+  window.addEventListener('unload', ()=> { try{ clearInterval(extendTimer); }catch(e){} });
 
-  // observe top-level changes to detect iframe src updates or replacement
+  const doScanDebounced = ETM.debounce(function(){
+    try {
+      const e = ETM.scraper.getTempEmail();
+      ETM.ui.setEmail(e || '');
+
+      const found = ETM.scraper.scanIframesForDataSrc();
+      if (found && (found.text || found.html)) {
+        const fields = ETM.scraper.extractFieldsFromHtml(found.html || found.text);
+        const incomingBody = (fields.body || found.text || '').trim();
+        // pass frameElement so scraper can try to find 'Sender' in surrounding DOM
+        const added = ETM.scraper.addMailEntry({ from: fields.from || '', body: incomingBody, html: found.html || '', frameElement: found.frameElement });
+        if (added) {
+          ETM.ui.renderMailList(ETM.scraper.getAllMails());
+        } else {
+          // not new; ensure UI list still reflects store
+          ETM.ui.renderMailList(ETM.scraper.getAllMails());
+        }
+      } else {
+        ETM.ui.renderMailList(ETM.scraper.getAllMails());
+      }
+    } catch(e){ console.warn('scan error', e && e.message); }
+  }, 180);
+
+  try { doScanDebounced(); } catch(e){}
   try {
     const mo = new MutationObserver(function(muts){
-      // simple heuristic: if iframe added/removed or iframe src/srcdoc changed -> update
       let should = false;
       for (const m of muts) {
         if (m.type === 'attributes' && m.target && m.target.tagName === 'IFRAME' &&
@@ -60,15 +74,15 @@
           if (should) break;
         }
       }
-      if (should) doUpdate();
+      if (should) doScanDebounced();
     });
     mo.observe(document.documentElement || document.body, {subtree: true, childList: true, attributes: true, attributeFilter: ['src','srcdoc']});
-    // stop observing on unload
-    window.addEventListener('unload', () => { try{ mo.disconnect(); }catch(e){} });
+    window.addEventListener('unload', ()=> { try{ mo.disconnect(); }catch(e){} });
   } catch(e){}
 
-  // also poll occasionally at low frequency as fallback (every 2.5s)
-  const periodic = setInterval(() => { try { doUpdate(); } catch(e){} }, 2500);
-  window.addEventListener('unload', () => { try{ clearInterval(periodic); }catch(e){} });
+  const periodic = setInterval(()=> { try { doScanDebounced(); } catch(e){} }, 2500);
+  window.addEventListener('unload', ()=> { try{ clearInterval(periodic); }catch(e){} });
 
-})(window.ETM || (window.ETM = {}));
+  window.addEventListener('ETM_FORCE_SCAN', ()=> { try { doScanDebounced(); } catch(e){} });
+
+})(window.ETM = window.ETM || {});

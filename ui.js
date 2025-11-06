@@ -1,6 +1,4 @@
-// ui.js
-// Overlay UI module. Exposes ETM.ui.init() and update functions.
-
+// ui.js (no preview panel; clicking opens full mail in new tab)
 window.ETM = window.ETM || {};
 (function(ns){
   const OVERLAY_ID = 'etempmail-overlay-modular';
@@ -14,7 +12,7 @@ window.ETM = window.ETM || {};
         position: fixed;
         bottom: 12px;
         right: 12px;
-        width: 360px;
+        width: 420px;
         max-width: calc(100vw - 24px);
         z-index: 2147483647;
         font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
@@ -28,37 +26,25 @@ window.ETM = window.ETM || {};
         backdrop-filter: blur(4px);
       `;
       o.innerHTML = `
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
           <strong style="font-size:14px">eTempMail — preview</strong>
           <div style="display:flex;gap:6px;align-items:center">
-            <button id="etempmail-toggle" title="Minimize" style="border:0;background:none;cursor:pointer;font-weight:600">—</button>
+            <button id="etempmail-refresh" title="Force scan" style="border:0;background:none;cursor:pointer">⟳</button>
             <button id="etempmail-copy" title="Copy email" style="border:0;background:none;cursor:pointer">Copy</button>
           </div>
         </div>
-        <div id="etempmail-email" style="color:#0b63a4;word-break:break-all;margin-bottom:6px">Email: (waiting…)</div>
-        <div id="etempmail-subject" style="color:#444;margin-bottom:6px;font-weight:600">(subject)</div>
-        <div id="etempmail-body" style="max-height:220px;overflow:auto;white-space:pre-wrap;color:#333;font-size:12px">(message preview — waiting)</div>
+
+        <div style="margin-bottom:8px;">
+          <div id="etempmail-email" style="color:#0b63a4;word-break:break-all;">Email: (waiting…)</div>
+        </div>
+
+        <div style="margin-bottom:8px;">
+          <div style="font-weight:600;margin-bottom:6px">Mails</div>
+          <div id="etempmail-mail-list" style="max-height:260px; overflow:auto; border-radius:6px; border:1px solid rgba(0,0,0,0.05); padding:6px;"></div>
+        </div>
       `;
       document.documentElement.appendChild(o);
 
-      // toggle/minimize button
-      const toggleBtn = document.getElementById('etempmail-toggle');
-      let minimized = false;
-      toggleBtn.addEventListener('click', () => {
-        minimized = !minimized;
-        const body = document.getElementById('etempmail-body');
-        const email = document.getElementById('etempmail-email');
-        const subject = document.getElementById('etempmail-subject');
-        if (minimized) {
-          body.style.display = 'none'; email.style.display = 'none'; subject.style.display = 'none';
-          toggleBtn.textContent = '+';
-        } else {
-          body.style.display = ''; email.style.display = ''; subject.style.display = '';
-          toggleBtn.textContent = '—';
-        }
-      });
-
-      // copy email button
       const copyBtn = document.getElementById('etempmail-copy');
       copyBtn.addEventListener('click', async () => {
         try {
@@ -67,41 +53,82 @@ window.ETM = window.ETM || {};
           await navigator.clipboard.writeText(emailText);
           copyBtn.textContent = '✓';
           setTimeout(()=> copyBtn.textContent = 'Copy', 1200);
-        } catch(e) {
-          console.warn('copy failed', e);
-        }
+        } catch(e) { console.warn('copy failed', e); }
       });
 
-    } catch(e){
-      // don't throw
-      console.warn('ui.createOverlay failed', e && e.message);
-    }
+      const refreshBtn = document.getElementById('etempmail-refresh');
+      refreshBtn.addEventListener('click', () => {
+        window.dispatchEvent(new CustomEvent('ETM_FORCE_SCAN'));
+      });
+
+      const list = document.getElementById('etempmail-mail-list');
+      list.addEventListener('click', (ev) => {
+        const el = ev.target.closest('.etm-mail-item');
+        if (!el) return;
+        const id = el.dataset.mailId;
+        if (!id) return;
+        try {
+          const m = window.ETM.scraper.getMailById(id);
+          if (m) openMailInNewTab(m);
+        } catch(e){ console.warn(e); }
+      });
+
+    } catch(e){ console.warn('ui.createOverlay failed', e && e.message); }
   }
 
-  function setEmail(email){
+  function setEmail(email){ try { const el = document.getElementById('etempmail-email'); if (el) el.textContent = email ? `Email: ${email}` : 'Email: (not found)'; } catch(e){} }
+
+  function renderMailList(mails){
     try {
-      const el = document.getElementById('etempmail-email');
-      if (el) el.textContent = email ? `Email: ${email}` : 'Email: (not found)';
-    } catch(e){}
+      const container = document.getElementById('etempmail-mail-list');
+      if (!container) return;
+      container.innerHTML = '';
+      if (!mails || mails.length===0) {
+        container.innerHTML = '<div style="color:#666;font-size:12px">No mails yet</div>';
+        return;
+      }
+      for (const m of mails) {
+        const item = document.createElement('div');
+        item.className = 'etm-mail-item';
+        item.dataset.mailId = m.id;
+        item.style.cssText = 'padding:8px;border-radius:6px;margin-bottom:8px;cursor:pointer;background:#fff;border:1px solid rgba(0,0,0,0.03);';
+        const snippet = (m.body || '').split(/\r?\n/).map(l=>l.trim()).filter(Boolean).slice(0,2).join(' — ');
+        item.innerHTML = `
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div style="font-size:13px;color:#111;font-weight:600">${escapeHtml(m.from || '(unknown)')}</div>
+            <div style="font-size:11px;color:#666">${new Date(m.receivedAt).toLocaleString()}</div>
+          </div>
+          <div style="margin-top:6px;font-size:12px;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(snippet || '(empty preview)')}</div>
+        `;
+        container.appendChild(item);
+      }
+      // newest at top, keep scroll at top so newest visible
+      container.scrollTop = 0;
+    } catch(e){ console.warn('renderMailList failed', e && e.message); }
   }
-  function setSubject(subject){
+
+  function openMailInNewTab(m) {
     try {
-      const el = document.getElementById('etempmail-subject');
-      if (el) el.textContent = subject ? subject : '(no subject)';
-    } catch(e){}
+      const title = (m.from || '(unknown sender)') + ' — ' + new Date(m.receivedAt).toLocaleString();
+      const bodyHtml = m.html && m.html.length>20 ? m.html : ('<pre style="white-space:pre-wrap;font-family:system-ui">' + escapeHtml(m.body || '') + '</pre>');
+      const fullHtml = `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title></head><body>${bodyHtml}</body></html>`;
+      const blob = new Blob([fullHtml], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(()=> URL.revokeObjectURL(url), 60_000);
+    } catch(e){ console.warn('openMailInNewTab failed', e && e.message); }
   }
-  function setBody(body){
-    try {
-      const el = document.getElementById('etempmail-body');
-      if (el) el.textContent = body ? body : '(message preview — not found yet)';
-    } catch(e){}
+
+  function escapeHtml(s){
+    if (!s) return '';
+    return String(s).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]; });
   }
 
   ns.ui = {
     init: function(){ createOverlay(); },
     setEmail,
-    setSubject,
-    setBody
+    renderMailList,
+    openMailInNewTab
   };
 
 })(window.ETM);
