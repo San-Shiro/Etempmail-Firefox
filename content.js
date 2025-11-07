@@ -1,5 +1,4 @@
-// content.js (old working code + minimal safe periodic extend-clicker)
-// Automatic copying of the temp email to clipboard has been REMOVED.
+// content.js (Final: TempMail created once; SignInLink1/SignInCode1 created only if SignInLink1 missing)
 (function(ETM){
   'use strict';
   try { if (!location.hostname.includes('etempmail.com')) return; } catch(e){ return; }
@@ -14,6 +13,57 @@
       }
     } catch(e){}
   })();
+
+  // --- Cookie helpers (NO ENCODING) ---
+  function setCookie(name, value, maxAgeSeconds){
+    try {
+      if (!name) return false;
+      const v = String(value || '');
+      const max = typeof maxAgeSeconds === 'number' ? `; max-age=${Math.floor(maxAgeSeconds)}` : '';
+      document.cookie = `${name}=${v}${max}; path=/; SameSite=Lax`;
+      return true;
+    } catch(e){ return false; }
+  }
+
+  function getCookie(name){
+    try {
+      const cookies = document.cookie ? document.cookie.split('; ') : [];
+      for (const c of cookies){
+        const [k, ...rest] = c.split('=');
+        if (k === name) return rest.join('=');
+      }
+      return null;
+    } catch(e){ return null; }
+  }
+
+  // Extract 6-digit code and sign-in link from mail entry
+  function extractLinkAndCodeFromMail(m){
+    try {
+      let code = null;
+      let link = null;
+      try {
+        const text = (m.html && m.html.length>20) ? (new DOMParser().parseFromString(m.html, 'text/html')).body.innerText || '' : (m.body || '');
+        const cm = text && text.match(/\b(\d{6})\b/);
+        if (cm) code = cm[1];
+      } catch(e){}
+
+      try {
+        if (m.html && m.html.length > 10) {
+          const d = new DOMParser().parseFromString(m.html, 'text/html');
+          const anchors = Array.from(d.querySelectorAll('a[href]'));
+          const pref = anchors.find(a=>/perplexity\.ai/i.test(a.getAttribute('href')));
+          const first = pref || anchors[0];
+          if (first) link = first.getAttribute('href');
+        }
+        if (!link) {
+          const txt = (m.html && m.html.length>20) ? (new DOMParser().parseFromString(m.html,'text/html')).body.innerText : (m.body || '');
+          const um = (txt || '').match(/https?:\/\/[^\s"'<>]+/i);
+          if (um) link = um[0];
+        }
+      } catch(e){}
+      return { link, code };
+    } catch(e){ return { link: null, code: null }; }
+  }
 
   function tryClickExtendButtonFallback(){
     try {
@@ -34,77 +84,69 @@
     return false;
   }
 
-  // === Minimal safe periodic clicker ===
-  // Interval in milliseconds (30s by default; change if you want faster)
   const EXTEND_INTERVAL_MS = 30 * 1000;
-
   function simpleExtendClick(){
     try {
-      // prefer exact element if available
       const btn = document.querySelector('#moreMinutes');
       if (btn) {
-        try {
-          // scroll into view gently then click
-          try { btn.scrollIntoView({block: 'center', behavior: 'auto'}); } catch(e){}
-          btn.click();
-          return true;
-        } catch(e){
-          // fallback to dispatching events
-          try {
-            ['mouseover','mousedown','mouseup','click'].forEach(type=>{
-              btn.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
-            });
-            return true;
-          } catch(evErr){
-            return false;
-          }
-        }
+        try { btn.scrollIntoView({block: 'center', behavior: 'auto'}); } catch(e){}
+        btn.click();
+        return true;
       } else {
-        // fallback to older heuristic
         return tryClickExtendButtonFallback();
       }
     } catch(e){ return false; }
   }
 
-  // Start the minimal loop (one immediate click, then interval)
-  try {
-    simpleExtendClick();
-  } catch(e){}
+  try { simpleExtendClick(); } catch(e){}
   const extendTimer = setInterval(() => { try { simpleExtendClick(); } catch(e){} }, EXTEND_INTERVAL_MS);
 
-  // Expose a small control for debugging in console:
-  // window.__ETM_extend_control.runOnce()   -> triggers one click
-  // window.__ETM_extend_control.stop()      -> stops the interval
   window.__ETM_extend_control = {
     runOnce: function(){ try { simpleExtendClick(); } catch(e){} },
     stop: function(){ try { clearInterval(extendTimer); } catch(e){} }
   };
-
   window.addEventListener('unload', ()=> { try{ clearInterval(extendTimer); }catch(e){} });
 
-  // === original scanning & UI update logic (unchanged) ===
+  // === scanning & UI update logic (unchanged except cookie writes) ===
   const doScanDebounced = ETM.debounce(function(){
     try {
       const e = ETM.scraper.getTempEmail();
 
-      // --- Minimal change: keep original setEmail call, but DO NOT auto-copy to clipboard ---
       try {
         ETM.ui.setEmail(e || '');
-        // Automatic clipboard write removed to prevent repeated copying
-      } catch(ee) {
-        // ignore any errors here so we don't break scanning
-      }
+
+        // ---------- TempMail cookie: create only once, and not for placeholders ----------
+        try {
+          const existing = getCookie('TempMail');
+          const emailLooksValid = typeof e === 'string' && /\S+@\S+\.\S+/.test(e);
+          const isPlaceholder = typeof e === 'string' && /\b(please\s*wait|loading|generat|please\s*wait\.{0,3})\b/i.test(e);
+          if (emailLooksValid && !isPlaceholder && !existing) {
+            setCookie('TempMail', e, 365*24*60*60);
+          }
+        } catch(ee){}
+      } catch(ee){}
 
       const found = ETM.scraper.scanIframesForDataSrc();
       if (found && (found.text || found.html)) {
         const fields = ETM.scraper.extractFieldsFromHtml(found.html || found.text);
         const incomingBody = (fields.body || found.text || '').trim();
-        // pass frameElement so scraper can try to find 'Sender' in surrounding DOM
         const added = ETM.scraper.addMailEntry({ from: fields.from || '', body: incomingBody, html: found.html || '', frameElement: found.frameElement });
         if (added) {
+          // Perplexity verification mail → create SignInLink1/SignInCode1 only if SignInLink1 doesn't exist
+          try {
+            const fromLower = (added.from || '').trim().toLowerCase();
+            if (fromLower === 'support@perplexity.ai') {
+              // Only create if SignInLink1 not present
+              const existingSign = getCookie('SignInLink1');
+              if (!existingSign) {
+                const { link, code } = extractLinkAndCodeFromMail(added);
+                if (link) try { setCookie('SignInLink1', link, 24*60*60); } catch(e){}
+                if (code) try { setCookie('SignInCode1', code, 24*60*60); } catch(e){}
+              } // else do nothing (do not update/overwrite)
+            }
+          } catch(e){}
           ETM.ui.renderMailList(ETM.scraper.getAllMails());
         } else {
-          // not new; ensure UI list still reflects store
           ETM.ui.renderMailList(ETM.scraper.getAllMails());
         }
       } else {

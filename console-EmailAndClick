@@ -1,0 +1,130 @@
+(async function robustInPageType() {
+  const EMAIL = "roiwzfxavd@ohm.edu.pl";
+
+  function rand(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  // find input
+  const input = document.querySelector('input[type="email"], input[name="email"], input[autocomplete="email"], input[placeholder*="email" i], input');
+  if (!input) { console.error("Email input not found"); return; }
+
+  // helpers to dispatch events that frameworks often listen to
+  function dispatch(type) {
+    try { input.dispatchEvent(new Event(type, { bubbles: true })); } catch(e) {}
+  }
+  function dispatchBeforeInput(data, inputType='insertText') {
+    try {
+      const ev = new InputEvent('beforeinput', { data, inputType, bubbles: true, cancelable: true });
+      input.dispatchEvent(ev);
+    } catch(e){}
+  }
+  function dispatchInput(data, inputType='insertText') {
+    try {
+      const ev = new InputEvent('input', { data, inputType, bubbles: true, cancelable: false });
+      input.dispatchEvent(ev);
+    } catch(e){}
+  }
+  function dispatchComposition(type, data='') {
+    try {
+      const ev = new CompositionEvent(type, { data, bubbles: true });
+      input.dispatchEvent(ev);
+    } catch(e){}
+  }
+  function dispatchKey(name, code, type='keydown') {
+    try {
+      input.dispatchEvent(new KeyboardEvent(type, { key: name, code, bubbles: true, cancelable: true }));
+    } catch(e) {}
+  }
+
+  // focus first (as you requested)
+  input.focus();
+  try { input.scrollIntoView({ block: "center" }); } catch(e){}
+
+  // gentle clear
+  try {
+    input.setSelectionRange && input.setSelectionRange(0, input.value.length);
+    document.execCommand && document.execCommand('delete');
+    dispatchInput('', 'deleteContentBackward');
+  } catch (e) {}
+
+  // begin composition
+  dispatchComposition('compositionstart', '');
+  dispatch('focus');
+
+  // type with occasional micro-pauses and rare backspace to mimic humans
+  for (let i = 0; i < EMAIL.length; i++) {
+    const ch = EMAIL[i];
+
+    // random tiny pause to vary rhythm
+    await sleep(rand(40, 160));
+
+    // beforeinput
+    dispatchBeforeInput(ch, 'insertText');
+
+    // Try execCommand insertText (some engines treat as more native)
+    let execOk = false;
+    try {
+      input.focus();
+      execOk = document.execCommand && document.execCommand('insertText', false, ch);
+    } catch(e){ execOk = false; }
+
+    if (!execOk) {
+      // fallback: splice value & move caret
+      try {
+        const start = typeof input.selectionStart === 'number' ? input.selectionStart : input.value.length;
+        const end = typeof input.selectionEnd === 'number' ? input.selectionEnd : start;
+        input.value = input.value.slice(0, start) + ch + input.value.slice(end);
+        const pos = start + 1;
+        input.setSelectionRange && input.setSelectionRange(pos, pos);
+      } catch(e) {
+        input.value += ch;
+      }
+    }
+
+    // dispatch keyboard & input events
+    dispatchKey(ch, 'Key' + ch.toUpperCase(), 'keydown');
+    dispatchInput(ch, 'insertText');
+    dispatchKey(ch, 'Key' + ch.toUpperCase(), 'keyup');
+
+    // occasionally simulate a backspace and retype (human-like)
+    if (Math.random() < 0.06 && i > 2) {
+      await sleep(rand(80, 300));
+      // backspace
+      try {
+        const pos = input.selectionStart || input.value.length;
+        if (pos > 0) {
+          const newVal = input.value.slice(0, pos - 1) + input.value.slice(pos);
+          input.value = newVal;
+          input.setSelectionRange && input.setSelectionRange(pos - 1, pos - 1);
+        }
+      } catch(e){}
+      dispatchBeforeInput(null, 'deleteContentBackward');
+      dispatchInput(null, 'deleteContentBackward');
+      await sleep(rand(80, 150));
+      // retype that char again
+      i--; // retype previous char on next loop iteration
+    }
+  }
+
+  // end composition
+  dispatchComposition('compositionend', EMAIL);
+  dispatchInput(EMAIL, 'insertText');
+  dispatch('change');
+
+  console.log('✅ Finished typing. Current input value:', input.value);
+
+  // === Auto-click step ===
+  await sleep(800); // brief pause to allow UI to enable the button
+
+  const btn = [...document.querySelectorAll('button, [role="button"]')]
+    .find(b => b.textContent.trim() === "Continue with email");
+
+  if (btn) {
+    btn.scrollIntoView({ behavior: "smooth", block: "center" });
+    await sleep(300);
+    btn.click();
+    console.log("✅ Clicked 'Continue with email' button.");
+  } else {
+    console.error("❌ Button not found after typing.");
+  }
+})();
