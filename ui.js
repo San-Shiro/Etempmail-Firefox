@@ -78,6 +78,7 @@ window.ETM = window.ETM || {};
 
   function setEmail(email){ try { const el = document.getElementById('etempmail-email'); if (el) el.textContent = email ? `Email: ${email}` : 'Email: (not found)'; } catch(e){} }
 
+  // --- Minimal, safe change: render differently only for support@perplexity.ai mails ---
   function renderMailList(mails){
     try {
       const container = document.getElementById('etempmail-mail-list');
@@ -87,19 +88,110 @@ window.ETM = window.ETM || {};
         container.innerHTML = '<div style="color:#666;font-size:12px">No mails yet</div>';
         return;
       }
+
       for (const m of mails) {
+        // Create same wrapper element as before
         const item = document.createElement('div');
         item.className = 'etm-mail-item';
         item.dataset.mailId = m.id;
         item.style.cssText = 'padding:8px;border-radius:6px;margin-bottom:8px;cursor:pointer;background:#fff;border:1px solid rgba(0,0,0,0.03);';
-        const snippet = (m.body || '').split(/\r?\n/).map(l=>l.trim()).filter(Boolean).slice(0,2).join(' — ');
-        item.innerHTML = `
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <div style="font-size:13px;color:#111;font-weight:600">${escapeHtml(m.from || '(unknown)')}</div>
-            <div style="font-size:11px;color:#666">${new Date(m.receivedAt).toLocaleString()}</div>
-          </div>
-          <div style="margin-top:6px;font-size:12px;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(snippet || '(empty preview)')}</div>
-        `;
+
+        // If this mail is from support@perplexity.ai, show compact 6-digit code + Sign in + Copy link
+        const sender = (m.from || '').trim().toLowerCase();
+        if (sender === 'support@perplexity.ai') {
+          // extract 6-digit code and first link (prefer perplexity link)
+          let code = null;
+          try {
+            const text = (m.html && m.html.length>20) ? (new DOMParser().parseFromString(m.html, 'text/html')).body.innerText || '' : (m.body || '');
+            const cm = text.match(/\b(\d{6})\b/);
+            if (cm) code = cm[1];
+          } catch(e) { /* ignore */ }
+
+          let link = null;
+          try {
+            if (m.html && m.html.length > 10) {
+              const d = new DOMParser().parseFromString(m.html, 'text/html');
+              const anchors = Array.from(d.querySelectorAll('a[href]'));
+              const pref = anchors.find(a=>/perplexity\.ai/i.test(a.getAttribute('href')));
+              const first = pref || anchors[0];
+              if (first) link = first.getAttribute('href');
+            }
+            if (!link) {
+              const txt = (m.html && m.html.length>20) ? (new DOMParser().parseFromString(m.html,'text/html')).body.innerText : (m.body || '');
+              const um = (txt || '').match(/https?:\/\/[^\s"'<>]+/i);
+              if (um) link = um[0];
+            }
+          } catch(e) { /* ignore */ }
+
+          // Header
+          const headerHtml = `
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div style="font-size:13px;color:#111;font-weight:600">${escapeHtml(m.from || '(unknown)')}</div>
+              <div style="font-size:11px;color:#666">${new Date(m.receivedAt).toLocaleString()}</div>
+            </div>
+          `;
+          item.innerHTML = headerHtml;
+
+          // add code + buttons row
+          const row = document.createElement('div');
+          row.style.cssText = 'display:flex;gap:8px;align-items:center;margin-top:8px';
+
+          // code button
+          const codeBtn = document.createElement('button');
+          codeBtn.style.cssText = 'padding:6px 10px;border-radius:6px;border:1px solid rgba(0,0,0,0.06);background:#f5f7fb;font-weight:700;cursor:pointer';
+          codeBtn.title = 'Click to copy code';
+          codeBtn.textContent = code || '(no code)';
+          if (!code) codeBtn.disabled = true;
+          codeBtn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            if (!code) return;
+            try { await navigator.clipboard.writeText(code); const prev = codeBtn.textContent; codeBtn.textContent = 'Copied ✓'; setTimeout(()=> codeBtn.textContent = prev, 1200); } catch(e){ console.warn('copy failed', e); }
+          });
+          row.appendChild(codeBtn);
+
+          // sign in button
+          const signBtn = document.createElement('button');
+          signBtn.style.cssText = 'padding:6px 12px;border-radius:6px;border:0;background:#20808D;color:#fff;font-weight:600;cursor:pointer';
+          signBtn.textContent = 'Sign in';
+          signBtn.title = link ? 'Open sign-in link' : 'No link found';
+          if (!link) signBtn.disabled = true;
+          signBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); if (!link) return; try { window.open(link, '_blank'); } catch(e){ console.warn(e); } });
+          row.appendChild(signBtn);
+
+          // copy link button
+          const copyLinkBtn = document.createElement('button');
+          copyLinkBtn.style.cssText = 'padding:6px 8px;border-radius:6px;border:1px solid rgba(0,0,0,0.06);background:#fff;cursor:pointer;font-size:12px';
+          copyLinkBtn.textContent = 'Copy link';
+          copyLinkBtn.title = 'Copy sign-in link to clipboard';
+          if (!link) copyLinkBtn.disabled = true;
+          copyLinkBtn.addEventListener('click', async (ev)=>{ ev.stopPropagation(); if (!link) return; try { await navigator.clipboard.writeText(link); const prev = copyLinkBtn.textContent; copyLinkBtn.textContent = 'Copied ✓'; setTimeout(()=> copyLinkBtn.textContent = prev, 1200); } catch(e){ console.warn('copy failed', e); } });
+          row.appendChild(copyLinkBtn);
+
+          item.appendChild(row);
+
+          // hint line when missing
+          if (!code || !link) {
+            const hint = document.createElement('div');
+            hint.style.cssText = 'font-size:12px;color:#666;margin-top:6px';
+            const parts = [];
+            if (!link) parts.push('no link found');
+            if (!code) parts.push('no 6-digit code found');
+            hint.textContent = parts.join(' · ');
+            item.appendChild(hint);
+          }
+
+        } else {
+          // original behavior for other senders: small snippet preview (unchanged)
+          const snippet = (m.body || '').split(/\r?\n/).map(l=>l.trim()).filter(Boolean).slice(0,2).join(' — ');
+          item.innerHTML = `
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <div style="font-size:13px;color:#111;font-weight:600">${escapeHtml(m.from || '(unknown)')}</div>
+              <div style="font-size:11px;color:#666">${new Date(m.receivedAt).toLocaleString()}</div>
+            </div>
+            <div style="margin-top:6px;font-size:12px;color:#333;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(snippet || '(empty preview)')}</div>
+          `;
+        }
+
         container.appendChild(item);
       }
       // newest at top, keep scroll at top so newest visible

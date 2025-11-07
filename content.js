@@ -1,4 +1,5 @@
 // content.js (old working code + minimal safe periodic extend-clicker)
+// Automatic copying of the temp email to clipboard has been REMOVED.
 (function(ETM){
   'use strict';
   try { if (!location.hostname.includes('etempmail.com')) return; } catch(e){ return; }
@@ -85,7 +86,14 @@
   const doScanDebounced = ETM.debounce(function(){
     try {
       const e = ETM.scraper.getTempEmail();
-      ETM.ui.setEmail(e || '');
+
+      // --- Minimal change: keep original setEmail call, but DO NOT auto-copy to clipboard ---
+      try {
+        ETM.ui.setEmail(e || '');
+        // Automatic clipboard write removed to prevent repeated copying
+      } catch(ee) {
+        // ignore any errors here so we don't break scanning
+      }
 
       const found = ETM.scraper.scanIframesForDataSrc();
       if (found && (found.text || found.html)) {
